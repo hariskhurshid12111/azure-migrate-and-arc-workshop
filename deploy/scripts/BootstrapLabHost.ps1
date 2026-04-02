@@ -3,6 +3,7 @@
 # Azure Migrate & Arc Workshop — Lab Host Bootstrap Script
 # Author: Haris Khurshid, MCT
 # Description: Downloads pre-configured VMs, installs Hyper-V, prepares host
+# Updated: 2026-04-02
 #==============================================================================
 
 Start-Transcript -Path "C:\BootstrapHarisKhurshidLTDHost_log.txt" -Append
@@ -156,6 +157,14 @@ foreach ($vm in $vms) {
         Write-Host "    BITS failed, using Invoke-WebRequest..." -ForegroundColor Yellow
         Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadDest -UseBasicParsing
         Write-Host "    Downloaded via WebRequest" -ForegroundColor Green
+    }
+
+    # Verify download size (skip empty files)
+    $downloadedSize = (Get-Item $downloadDest -ErrorAction SilentlyContinue).Length
+    if ($downloadedSize -lt 1MB) {
+        Write-Host "    WARNING: Downloaded file is too small ($downloadedSize bytes) — skipping extraction" -ForegroundColor Red
+        Remove-Item -Path $downloadDest -Force -ErrorAction SilentlyContinue
+        continue
     }
 
     # Decompress
