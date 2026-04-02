@@ -3,6 +3,7 @@
 # Azure Migrate & Arc Workshop — Post-Reboot VM Configuration
 # Author: Haris Khurshid, MCT
 # Description: Creates Hyper-V switch, NAT, and starts nested VMs
+# Updated: 2026-04-02 — Fixed: Gen1, RAM, Switch name to match actual lab
 #==============================================================================
 
 Start-Transcript -Path "C:\HarisKhurshidLTDLab\PostRebootConfigure_log.txt" -Append
@@ -44,17 +45,18 @@ if ($retries -eq $maxRetries) {
 Write-Host "`n[STEP 2] Creating virtual switch and NAT..." -ForegroundColor Yellow
 
 # Create Internal Switch
-$existingSwitch = Get-VMSwitch -Name "InternalNATSwitch" -ErrorAction SilentlyContinue
+$switchName = "LabSwitch"
+$existingSwitch = Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue
 if (-not $existingSwitch) {
-    New-VMSwitch -Name "InternalNATSwitch" -SwitchType Internal
-    Write-Host "  Created VMSwitch: InternalNATSwitch" -ForegroundColor Green
+    New-VMSwitch -Name $switchName -SwitchType Internal
+    Write-Host "  Created VMSwitch: $switchName" -ForegroundColor Green
 } else {
     Write-Host "  VMSwitch already exists." -ForegroundColor Green
 }
 
 # Set Host IP on Switch Adapter
 Start-Sleep -Seconds 5
-$adapter = Get-NetAdapter | Where-Object { $_.Name -like "*InternalNATSwitch*" }
+$adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$switchName*" }
 if ($adapter) {
     $existingIP = Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress "192.168.100.1" -ErrorAction SilentlyContinue
     if (-not $existingIP) {
@@ -64,14 +66,14 @@ if ($adapter) {
         Write-Host "  IP already configured." -ForegroundColor Green
     }
 } else {
-    Write-Host "  ERROR: Could not find NAT switch adapter!" -ForegroundColor Red
+    Write-Host "  ERROR: Could not find switch adapter!" -ForegroundColor Red
 }
 
 # Create NAT
-$existingNat = Get-NetNat -Name "InternalNat" -ErrorAction SilentlyContinue
+$existingNat = Get-NetNat -Name "LabNat" -ErrorAction SilentlyContinue
 if (-not $existingNat) {
-    New-NetNat -Name "InternalNat" -InternalIPInterfaceAddressPrefix "192.168.100.0/24"
-    Write-Host "  Created NAT: InternalNat (192.168.100.0/24)" -ForegroundColor Green
+    New-NetNat -Name "LabNat" -InternalIPInterfaceAddressPrefix "192.168.100.0/24"
+    Write-Host "  Created NAT: LabNat (192.168.100.0/24)" -ForegroundColor Green
 } else {
     Write-Host "  NAT already exists." -ForegroundColor Green
 }
@@ -109,16 +111,16 @@ function Find-Vhdx {
 }
 
 #==============================================================================
-# STEP 4: Create Virtual Machines
+# STEP 4: Create Virtual Machines (Generation 1)
 #==============================================================================
 Write-Host "`n[STEP 4] Creating virtual machines..." -ForegroundColor Yellow
 
 $vmConfigs = @(
-    @{ Name = 'hariskhurshidltd-dc';    RAM = 4GB; CPU = 2; SecureBoot = $true }
-    @{ Name = 'hariskhurshidltdweb1';   RAM = 4GB; CPU = 2; SecureBoot = $true }
-    @{ Name = 'hariskhurshidltdweb2';   RAM = 4GB; CPU = 2; SecureBoot = $true }
-    @{ Name = 'hariskhurshidltdsql1';   RAM = 4GB; CPU = 2; SecureBoot = $true }
-    @{ Name = 'hariskhurshidltdlinux1'; RAM = 2GB; CPU = 2; SecureBoot = $false }
+    @{ Name = 'hariskhurshidltd-dc';    RAM = 2GB; CPU = 2 }
+    @{ Name = 'hariskhurshidltdweb1';   RAM = 2GB; CPU = 2 }
+    @{ Name = 'hariskhurshidltdweb2';   RAM = 2GB; CPU = 2 }
+    @{ Name = 'hariskhurshidltdsql1';   RAM = 4GB; CPU = 2 }
+    @{ Name = 'hariskhurshidltdlinux1'; RAM = 2GB; CPU = 2 }
 )
 
 foreach ($config in $vmConfigs) {
@@ -135,41 +137,26 @@ foreach ($config in $vmConfigs) {
     # Find VHDX
     $vhdxPath = Find-Vhdx -VMName $vmName
     if (-not $vhdxPath) {
-        Write-Host "    ERROR: VHDX not found for $vmName!" -ForegroundColor Red
+        Write-Host "    ERROR: VHDX not found for $vmName — skipping!" -ForegroundColor Red
         continue
     }
     Write-Host "    Found VHDX: $vhdxPath" -ForegroundColor Green
 
-    # Create VM (Generation 2, no VHD initially)
+    # Create VM (Generation 1 with VHD)
     New-VM -Name $vmName `
-        -Generation 2 `
+        -Generation 1 `
         -MemoryStartupBytes $config.RAM `
-        -SwitchName "InternalNATSwitch" `
-        -NoVHD
+        -VHDPath $vhdxPath `
+        -SwitchName $switchName
 
-    # Add existing VHD
-    Add-VMHardDiskDrive -VMName $vmName -Path $vhdxPath
-
-    # Configure CPU
+    # Configure CPU and auto-start
     Set-VM -Name $vmName `
         -ProcessorCount $config.CPU `
         -AutomaticStartAction Start `
         -AutomaticStopAction ShutDown `
         -AutomaticStartDelay 0
 
-    # Set boot device to VHD
-    $vhd = Get-VMHardDiskDrive -VMName $vmName | Select-Object -First 1
-    Set-VMFirmware -VMName $vmName -FirstBootDevice $vhd
-
-    # Configure Secure Boot
-    if (-not $config.SecureBoot) {
-        Set-VMFirmware -VMName $vmName -EnableSecureBoot Off
-        Write-Host "    Secure Boot: OFF (Linux)" -ForegroundColor Yellow
-    } else {
-        Write-Host "    Secure Boot: ON" -ForegroundColor Green
-    }
-
-    Write-Host "    Created: $vmName ($($config.RAM/1GB)GB RAM, $($config.CPU) CPU)" -ForegroundColor Green
+    Write-Host "    Created: $vmName (Gen1, $($config.RAM/1GB)GB RAM, $($config.CPU) CPU)" -ForegroundColor Green
 }
 
 #==============================================================================
@@ -186,8 +173,13 @@ Start-Sleep -Seconds 150
 # Start remaining VMs
 $otherVMs = @('hariskhurshidltdweb1', 'hariskhurshidltdweb2', 'hariskhurshidltdsql1', 'hariskhurshidltdlinux1')
 foreach ($vm in $otherVMs) {
-    Write-Host "  Starting $vm..." -ForegroundColor Cyan
-    Start-VM -Name $vm -ErrorAction SilentlyContinue
+    $existingVM = Get-VM -Name $vm -ErrorAction SilentlyContinue
+    if ($existingVM) {
+        Write-Host "  Starting $vm..." -ForegroundColor Cyan
+        Start-VM -Name $vm -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "  Skipping $vm (VM not found)" -ForegroundColor Yellow
+    }
 }
 
 Write-Host "  Waiting 60 seconds for all VMs to boot..." -ForegroundColor White
