@@ -66,10 +66,10 @@
             "location": "[resourceGroup().location]",
             "tags": "[variables('tags')]",
             "sku": {
-                "name": "Basic"
+                "name": "Standard"
             },
             "properties": {
-                "publicIPAllocationMethod": "Dynamic",
+                "publicIPAllocationMethod": "Static",
                 "dnsSettings": {
                     "domainNameLabel": "[toLower(concat('hkltdhost-', parameters('studentName')))]"
                 }
